@@ -83,24 +83,40 @@ def show():
             # SHAP Values for Feature Contribution Analysis
             st.subheader("SHAP Values (Feature Contributions)")
             try:
-                X = df[feature_names].values  # NumPy format avoids indexing errors
-                background = shap.kmeans(X, 10)  # Use a small representative sample
+                X = df[feature_names].values
+                X_sample = X[:50]  # use first 50 rows for explanation
+                background = shap.kmeans(X, 10)  # background for kernel explainer
 
-                if hasattr(model, "predict_proba"):
+                model_type = type(model).__name__.lower()
+
+                # Use different explainers based on model type
+                if "randomforest" in model_type or "xgb" in model_type:
+                    explainer = shap.TreeExplainer(model)
+                    shap_values = explainer.shap_values(X_sample)
+
+                elif "logisticregression" in model_type:
+                    explainer = shap.LinearExplainer(model, X)
+                    shap_values = explainer.shap_values(X_sample)
+
+                elif hasattr(model, "predict_proba"):
                     explainer = shap.KernelExplainer(model.predict_proba, background)
-                    shap_values = explainer.shap_values(X[:50])  # Limit samples for speed
+                    shap_values = explainer.shap_values(X_sample)
 
+                else:
+                    st.warning("Model type not supported for SHAP analysis.")
+                    shap_values = None
+
+                if shap_values is not None:
                     st.write("SHAP Summary Plot:")
                     fig, ax = plt.subplots(figsize=(10, 6))
-                    shap.summary_plot(shap_values, X[:50], feature_names=feature_names, show=False)
+                    shap.summary_plot(shap_values, X_sample, feature_names=feature_names, show=False)
                     st.pyplot(fig)
 
                     st.write("SHAP Bar Plot:")
                     fig, ax = plt.subplots(figsize=(10, 6))
-                    shap.summary_plot(shap_values, X[:50], feature_names=feature_names, plot_type="bar", show=False)
+                    shap.summary_plot(shap_values, X_sample, feature_names=feature_names, plot_type="bar", show=False)
                     st.pyplot(fig)
-                else:
-                    st.warning("Model does not support predict_proba. SHAP requires probability output.")
+
             except Exception as e:
                 st.warning(f"Could not compute SHAP values: {str(e)}")
 
@@ -172,3 +188,4 @@ def show():
         except Exception as e:
             st.error(f"Error processing model and data: {str(e)}")
             st.error("Please ensure the model and dataset are compatible.")
+            
