@@ -12,7 +12,7 @@ from pathlib import Path
 MODELS = {
     "Logistic Regression": LogisticRegression,
     "Random Forest": RandomForestClassifier,
-    "SVM": SVC,
+    "SVM": lambda: SVC(probability=True),
     "XGBoost": XGBClassifier
 }
 

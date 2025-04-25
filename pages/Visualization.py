@@ -16,10 +16,11 @@ import joblib
 def show():
     st.title("Model Visualization & Monitoring")
 
-    # Get available models and datasets
+    # Set up directories
     models_dir = Path("models")
     datasets_dir = Path("datasets")
 
+    # Check if models and datasets exist
     if not models_dir.exists() or not any(models_dir.glob("*.pkl")):
         st.warning("No trained models found. Please train a model first.")
         return
@@ -28,23 +29,25 @@ def show():
         st.warning("No datasets available. Please upload a dataset first.")
         return
 
-    # Sidebar for model and dataset selection
+    # Sidebar for selecting model and dataset
     with st.sidebar:
         st.subheader("Select Model & Dataset")
-        model_files = [f for f in models_dir.glob("*.pkl")]
+        model_files = list(models_dir.glob("*.pkl"))
+        dataset_files = list(datasets_dir.glob("*.csv"))
+
         selected_model = st.selectbox(
             "Select Model",
             options=[f.name for f in model_files],
             format_func=lambda x: x.replace(".pkl", "").replace("_", " ").title()
         )
 
-        dataset_files = [f for f in datasets_dir.glob("*.csv")]
         selected_dataset = st.selectbox(
             "Select Dataset",
             options=[f.name for f in dataset_files],
             format_func=lambda x: x.replace(".csv", "").title()
         )
 
+    # Proceed if both selections are made
     if selected_model and selected_dataset:
         try:
             # Load model and dataset
@@ -52,13 +55,11 @@ def show():
             model = model_data['model']
             feature_names = model_data['feature_names']
             target_column = model_data['target_column']
-
             df = pd.read_csv(datasets_dir / selected_dataset)
 
-            # Get model information
+            # Display model info
             model_info = get_model_info(models_dir / selected_model)
 
-            # Main content
             st.subheader("Model Information")
             col1, col2 = st.columns(2)
             with col1:
@@ -68,7 +69,7 @@ def show():
                 st.write("Dataset Shape:", df.shape)
                 st.write("Features:", len(df.columns))
 
-            # Feature Importance
+            # Feature Importance (if available)
             if model_info["feature_importance"] is not None:
                 st.subheader("Feature Importance")
                 importance_df = pd.DataFrame({
@@ -79,26 +80,31 @@ def show():
                 fig = px.bar(importance_df, x='Importance', y='Feature', orientation='h')
                 st.plotly_chart(fig)
 
-            # SHAP Values
-            st.subheader("SHAP Values")
+            # SHAP Values for Feature Contribution Analysis
+            st.subheader("SHAP Values (Feature Contributions)")
             try:
-                X = df[feature_names]
-                explainer = shap.Explainer(model, X)
-                shap_values = explainer(X)
+                X = df[feature_names].values  # NumPy format avoids indexing errors
+                background = shap.kmeans(X, 10)  # Use a small representative sample
 
-                # Summary plot
-                fig, ax = plt.subplots(figsize=(10, 6))
-                shap.summary_plot(shap_values, X, show=False)
-                st.pyplot(fig)
+                if hasattr(model, "predict_proba"):
+                    explainer = shap.KernelExplainer(model.predict_proba, background)
+                    shap_values = explainer.shap_values(X[:50])  # Limit samples for speed
 
-                # Bar plot
-                fig, ax = plt.subplots(figsize=(10, 6))
-                shap.summary_plot(shap_values, X, plot_type="bar", show=False)
-                st.pyplot(fig)
+                    st.write("SHAP Summary Plot:")
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    shap.summary_plot(shap_values, X[:50], feature_names=feature_names, show=False)
+                    st.pyplot(fig)
+
+                    st.write("SHAP Bar Plot:")
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    shap.summary_plot(shap_values, X[:50], feature_names=feature_names, plot_type="bar", show=False)
+                    st.pyplot(fig)
+                else:
+                    st.warning("Model does not support predict_proba. SHAP requires probability output.")
             except Exception as e:
                 st.warning(f"Could not compute SHAP values: {str(e)}")
 
-            # Data Quality Analysis
+            # Data Quality Checks
             st.subheader("Data Quality Analysis")
             col1, col2 = st.columns(2)
             with col1:
@@ -116,31 +122,33 @@ def show():
                 fig = px.histogram(df, x=column, color=target_column, marginal="box")
                 st.plotly_chart(fig)
 
-            # Correlation Matrix
+            # Correlation Heatmap
             st.subheader("Feature Correlation Matrix")
             corr_matrix = df[feature_names + [target_column]].corr()
             fig = px.imshow(corr_matrix, color_continuous_scale="RdBu")
             st.plotly_chart(fig)
 
-            # Model Performance Metrics
+            # Model Performance
             st.subheader("Model Performance Metrics")
-            X = df[feature_names]
+            X_df = df[feature_names]
             y_true = df[target_column]
-            y_pred = model.predict(X)
+            y_pred = model.predict(X_df)
 
             # Classification Report
+            st.write("Classification Report:")
             report = classification_report(y_true, y_pred)
             st.text(report)
 
             # Confusion Matrix
+            st.write("Confusion Matrix:")
             cm = confusion_matrix(y_true, y_pred)
             fig, ax = plt.subplots(figsize=(8, 6))
             sns.heatmap(cm, annot=True, fmt='d', ax=ax)
             st.pyplot(fig)
 
-            # ROC Curve (if applicable)
+            # ROC Curve
             try:
-                y_pred_proba = model.predict_proba(X)[:, 1]
+                y_pred_proba = model.predict_proba(X_df)[:, 1]
                 fpr, tpr, _ = roc_curve(y_true, y_pred_proba)
                 roc_auc = auc(fpr, tpr)
 
@@ -156,9 +164,9 @@ def show():
             st.subheader("Statistical Analysis")
             for column in feature_names:
                 if df[column].dtype in ['int64', 'float64']:
-                    # Perform t-test between feature and target
-                    t_stat, p_value = stats.ttest_ind(df[df[target_column] == 0][column],
-                                                    df[df[target_column] == 1][column])
+                    group_0 = df[df[target_column] == 0][column]
+                    group_1 = df[df[target_column] == 1][column]
+                    t_stat, p_value = stats.ttest_ind(group_0, group_1)
                     st.write(f"{column}: t-statistic = {t_stat:.4f}, p-value = {p_value:.4f}")
 
         except Exception as e:
